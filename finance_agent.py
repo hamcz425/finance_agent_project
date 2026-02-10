@@ -1,3 +1,4 @@
+import os
 import feedparser
 import requests
 from bs4 import BeautifulSoup
@@ -59,7 +60,7 @@ def analyze_news(news_text):
 
 def send_email(report):
     sender = "18318881324@163.com"
-    password = "BFyMtYiZuXdmnmh3"
+    password = os.getenv("EMAIL_PASS")
     receiver = "18318881324@163.com"
 
     msg = MIMEText(report, 'plain', 'utf-8')
