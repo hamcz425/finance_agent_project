@@ -5,6 +5,8 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import smtplib
 from email.mime.text import MIMEText
+from datetime import datetime
+print("程序启动时间：", datetime.now())
 
 # ===== AI 部分 =====
 from langchain_community.chat_models import ChatOllama
@@ -61,6 +63,7 @@ def analyze_news(news_text):
 def send_email(report):
     sender = "18318881324@163.com"
     password = os.getenv("EMAIL_PASS")
+    print("环境变量 EMAIL_PASS =", password)
     receiver = "18318881324@163.com"
 
     msg = MIMEText(report, 'plain', 'utf-8')
@@ -81,6 +84,12 @@ if __name__ == "__main__":
     report = analyze_news(news)
 
     print("📧 发送报告...")
+try:
     send_email(report)
+    print("邮件发送成功")
+except Exception as e:
+    print("邮件发送失败：", e)
+
 
     print("✅ 今日金融报告已发送！")
+
