@@ -1,141 +1,167 @@
 import os
-import feedparser
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from collections import Counter
 import smtplib
 from email.mime.text import MIMEText
-from datetime import datetime
+
 print("程序启动时间：", datetime.now())
 
-# ===== AI 部分 =====
+# ===== AI =====
 from langchain_community.chat_models import ChatOllama
-
 llm = ChatOllama(model="qwen2:7b")
 
-def collect_news():
-    """收集交易所公告（上交所+深交所）"""
-    headers = {"User-Agent": "Mozilla/5.0"}
-    news_list = []
-    
-    # 上交所公告
-    try:
-        url = "http://www.sse.com.cn/disclosure/listedinfo/announcement/"
-        res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        items = soup.find_all("a")[:20]
-        
-        for i in items:
-            text = i.get_text(strip=True)
-            if len(text) > 10:
-                news_list.append(text)
-    except Exception as e:
-        print(f"上交所公告获取失败: {e}")
-    
-    # 深交所公告
-    try:
-        url = "http://www.szse.cn/disclosure/listed/notice/"
-        res = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, "html.parser")
-        items = soup.find_all("a")[:20]
-        
-        for i in items:
-            text = i.get_text(strip=True)
-            if len(text) > 10:
-                news_list.append(text)
-    except Exception as e:
-        print(f"深交所公告获取失败: {e}")
-    
-    # 去重并限制数量
-    news_list = list(set(news_list))[:30]
-    print(f"收集到交易所公告 {len(news_list)} 条")
-    return news_list
 
-def collect_policy_news():
-    """抓取政策新闻（国务院+工信部）"""
+# =========================================================
+# 1️⃣ 交易所公告抓取（改进：过滤无效链接）
+# =========================================================
+def collect_exchange_announcements():
     headers = {"User-Agent": "Mozilla/5.0"}
     news = []
-    
-    # 国务院政策
-    try:
-        url = "https://www.gov.cn/zhengce/zuixin.htm"
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        items = soup.find_all("a")[:15]
-        
-        for i in items:
-            t = i.text.strip()
-            if len(t) > 10:
-                news.append("[政策] " + t)
-    except Exception as e:
-        print(f"国务院政策获取失败: {e}")
-    
-    # 工信部
-    try:
-        url = "https://www.miit.gov.cn/xwdt/"
-        r = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(r.text, "html.parser")
-        items = soup.find_all("a")[:15]
-        
-        for i in items:
-            t = i.text.strip()
-            if len(t) > 10:
-                news.append("[政策] " + t)
-    except Exception as e:
-        print(f"工信部新闻获取失败: {e}")
-    
-    print(f"收集到政策新闻 {len(news)} 条")
+
+    sources = [
+        ("上交所", "http://www.sse.com.cn/disclosure/listedinfo/announcement/"),
+        ("深交所", "http://www.szse.cn/disclosure/listed/notice/")
+    ]
+
+    for name, url in sources:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            # 只抓看起来像公告标题的链接
+            for a in soup.find_all("a"):
+                text = a.get_text(strip=True)
+
+                if (
+                    len(text) > 12 and
+                    "公告" in text and
+                    not text.startswith("http")
+                ):
+                    news.append(f"[公告]{text}")
+
+        except Exception as e:
+            print(f"{name} 抓取失败: {e}")
+
+    print(f"交易所公告获取 {len(news)} 条")
     return news
 
+
+# =========================================================
+# 2️⃣ 政策新闻抓取（只保留正文类标题）
+# =========================================================
+def collect_policy_news():
+    headers = {"User-Agent": "Mozilla/5.0"}
+    news = []
+
+    policy_sites = [
+        ("国务院", "https://www.gov.cn/zhengce/zuixin.htm"),
+        ("工信部", "https://www.miit.gov.cn/xwdt/")
+    ]
+
+    for name, url in policy_sites:
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            for a in soup.find_all("a"):
+                text = a.get_text(strip=True)
+                if len(text) > 15 and "解读" not in text:
+                    news.append(f"[政策]{text}")
+
+        except Exception as e:
+            print(f"{name} 抓取失败: {e}")
+
+    print(f"政策新闻获取 {len(news)} 条")
+    return news
+
+
+# =========================================================
+# 3️⃣ 关键词筛选（只对公告）
+# =========================================================
 def filter_key_announcements(news_list):
-    """筛选包含关键词的公告"""
     keywords = ["中标", "订单", "签署", "预增", "收购", "合作", "增持"]
     result = []
-    
+
     for n in news_list:
-        if any(k in n for k in keywords):
-            result.append("[公告] " + n)
-    
-    print(f"筛选后保留关键公告 {len(result)} 条")
+        if "[公告]" in n and any(k in n for k in keywords):
+            result.append(n)
+
+    print(f"关键公告筛选后 {len(result)} 条")
     return result
 
-def analyze_news(news_text):
+
+# =========================================================
+# 4️⃣ 题材统计（核心升级点🔥）
+# =========================================================
+def analyze_themes(news):
+    theme_map = {
+        "AI": ["人工智能", "算力", "芯片", "大模型"],
+        "新能源": ["光伏", "储能", "电池", "新能源"],
+        "半导体": ["半导体", "芯片", "封测"],
+        "军工": ["军工", "卫星", "导弹"],
+        "地产": ["房地产", "地产"],
+        "医药": ["医药", "医疗", "创新药"]
+    }
+
+    counter = Counter()
+
+    for item in news:
+        for theme, words in theme_map.items():
+            if any(w in item for w in words):
+                counter[theme] += 1
+
+    return counter
+
+
+# =========================================================
+# 5️⃣ AI 分析
+# =========================================================
+def analyze_with_ai(news, theme_counter):
+    theme_text = "\n".join([f"{k}：{v}条" for k, v in theme_counter.items()])
+
+    news_text = "\n".join(news[:30])
+
     prompt = f"""
 你是A股短线交易员。
 
-今日财经快讯：
+今日重要新闻：
 {news_text}
 
-严格按以下格式输出：
+题材统计：
+{theme_text}
 
-【政策 + 公司公告 + 重大事件】倾向总结
+请严格按以下格式：
+
+【市场主线判断】
 
 【哪些行业或方向受益】
 
-【是否有资金可能炒作的题材】
-1. 
-2. 
+【是否可能形成短线炒作题材】
+1.
+2.
 
-【情绪是偏机会还是利空】
+【情绪偏机会还是风险】
 
-要求：
-- 是否有在资金可能炒作的题材
-- 哪些行业或方向受益  
-- 情绪是偏机会还是利空
-- 若无有效交易主线，请明确输出：今日无交易主线
-
-禁止编造指数、涨跌幅、成交额。
-没有数据就写"未提供具体数据"。
+如果新闻分散，请写：今日无交易主线。
+禁止编造指数数据。
 """
 
     response = llm.invoke(prompt)
     return response.content
 
+
+# =========================================================
+# 6️⃣ 邮件发送
+# =========================================================
 def send_email(report):
     sender = "18318881324@163.com"
     password = os.getenv("EMAIL_PASS")
-    print("环境变量 EMAIL_PASS =", password)
     receiver = "18318881324@163.com"
+
+    if not password:
+        raise ValueError("未设置 EMAIL_PASS 环境变量")
 
     msg = MIMEText(report, 'plain', 'utf-8')
     msg['Subject'] = f"📈 AI金融日报 {datetime.now().strftime('%Y-%m-%d')}"
@@ -147,24 +173,26 @@ def send_email(report):
     server.sendmail(sender, receiver, msg.as_string())
     server.quit()
 
+
+# =========================================================
+# 主程序
+# =========================================================
 if __name__ == "__main__":
-    print("📰 收集新闻中...")
-    news1 = collect_news()  # 交易所公告
-    news2 = collect_policy_news()  # 政策新闻
-    
-    # 合并并筛选关键公告
-    all_news = news1 + news2
-    all_news = filter_key_announcements(all_news)
-    news = "\n".join(all_news)
+    print("开始收集数据...")
 
-    print("🧠 AI 分析中...")
-    report = analyze_news(news)
+    exchange_news = collect_exchange_announcements()
+    policy_news = collect_policy_news()
 
-    print("📧 发送报告...")
-    try:
-        send_email(report)
-        print("邮件发送成功")
-    except Exception as e:
-        print("邮件发送失败：", e)
+    key_announcements = filter_key_announcements(exchange_news)
 
-    print("✅ 今日金融报告已发送！")
+    all_news = key_announcements + policy_news
+
+    if not all_news:
+        report = "今日无关键公告或政策主线。"
+    else:
+        themes = analyze_themes(all_news)
+        report = analyze_with_ai(all_news, themes)
+
+    print("发送邮件中...")
+    send_email(report)
+    print("✅ 完成")
