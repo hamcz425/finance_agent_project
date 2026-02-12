@@ -92,6 +92,4 @@ except Exception as e:
 
 
     print("✅ 今日金融报告已发送！")
-    print("git test ok")
-
 
